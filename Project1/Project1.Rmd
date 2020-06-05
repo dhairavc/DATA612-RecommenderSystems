@@ -1,0 +1,161 @@
+---
+title: "Project 1"
+author: "Dhairav Chhatbar"
+date: "6/3/2020"
+output: html_document
+---
+```{r, message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(kableExtra)
+library(scales)
+```
+
+This simple system recommends how a specific user will rate a movie given the user's past rating and how the overall movie has been rated
+
+### Load Data
+Load the the ratings and movie title datasets
+```{r}
+ratings_import <- read.csv("https://raw.githubusercontent.com/dhairavc/DATA612-RecommenderSystems/master/Project1/ratings.csv")[,1:3]
+movie_titles <- read.csv("https://raw.githubusercontent.com/dhairavc/DATA612-RecommenderSystems/master/Project1/movies.csv")[,1:2]
+
+```
+
+
+### Crease Dense Subset
+For educational purposes create a smaller dense dataset of 5 randomly selected movies with the most reviews and 12 random users with a max 2 movies not rated per user
+```{r}
+# Create a subset of random 5 movies which have grather than 150 reviews
+m_filter <- ratings_import %>% select(movieId) %>% group_by(movieId) %>% summarise("RatingCount" = n()) %>% arrange(desc(RatingCount)) %>% filter(RatingCount > 150)
+m_filter <- m_filter[sample(nrow(m_filter), 5),]
+
+# Create subset of 12 random users which have rated atleast 3 of the 5 movies selected 
+u_filter <- ratings_import %>% filter(movieId %in% m_filter$movieId) %>% select(userId) %>% group_by(userId) %>% summarise("Rated" = n()) %>% arrange(desc(Rated)) %>% filter(Rated %in% c(3,4,5))
+rating_sample <- ratings_import %>% filter(movieId %in% m_filter$movieId) %>% filter(userId %in% sample(u_filter$userId,12))
+
+# Join movie titles and remove movie Ids
+rating_sample <- left_join(rating_sample, movie_titles, by = "movieId")
+rating_sample <- rating_sample %>% select(-movieId) 
+
+
+ratings <- spread(rating_sample, title, rating)
+row.names(ratings) <- c(ratings$userId)
+ratings <- ratings[,2:6]
+ratings %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+```
+### Split Datasets
+Split the existing dataset into training and testing datasets
+```{r}
+
+n <- nrow(ratings)
+p_train <- .6
+rowsintrain <- floor(n*p_train)
+randomize_order <- ratings[sample(n),]
+train_ratings <- randomize_order[1:rowsintrain,]
+test_ratings <- randomize_order[(rowsintrain+1):n,]
+
+#training dataset
+train_ratings %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+
+#testing dataset
+test_ratings %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+
+```
+### Raw Average
+Compute the raw average mean
+```{r}
+raw_average <- mean(as.matrix(train_ratings), na.rm = TRUE)
+raw_average
+```
+
+
+
+### RMSE Function
+Create function to calculate the Root Mean Squared Error (RMSE)
+```{r}
+
+RMSE_calc <- function(df, q) {
+  sqrt(mean(as.matrix(((df-q)^2)),na.rm = TRUE))
+}
+
+```
+
+### RMSE Calculation
+Calculate the RMSE RMSE for the raw average for both testing and training datasets
+```{r}
+
+train_RMSE <- RMSE_calc(train_ratings, raw_average)
+test_RMSE <- RMSE_calc(test_ratings, raw_average)
+
+train_RMSE
+test_RMSE
+```
+
+
+
+### Baseline Prediction for Training Dataset
+Calculate user and movie bias and calculate the baseline predictions for the training dataset
+```{r}
+user_bias <- rowMeans(train_ratings, na.rm = TRUE) - raw_average
+movie_bias <- colMeans(train_ratings, na.rm = TRUE) - raw_average
+
+train_ratings_pred <- data.frame(matrix(rep(raw_average, nrow(train_ratings)*ncol(train_ratings)), nrow = nrow(train_ratings)))
+
+colnames(train_ratings_pred) <- colnames(train_ratings)
+rownames(train_ratings_pred) <- rownames(train_ratings)
+train_ratings_pred <-round(sweep(train_ratings_pred,MARGIN = 2, STATS = movie_bias, FUN = "+")+user_bias,1)
+
+#clip [.5, 5]
+train_ratings_pred[which(train_ratings_pred < .5, arr.ind = TRUE)] <- .5
+train_ratings_pred[which(train_ratings_pred > 5, arr.ind = TRUE)] <- 5
+
+train_ratings_pred %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+
+```
+
+
+### Baseline Prediction for Test Dataset
+Calculate user bias and calculate the baseline predictions for the training dataset using the movie bias from the training dataset
+```{r}
+user_bias_test <- rowMeans(test_ratings, na.rm = TRUE)-raw_average
+test_ratings_pred <- data.frame(matrix(rep(raw_average, nrow(test_ratings)*ncol(test_ratings)), nrow = nrow(test_ratings)))
+colnames(test_ratings_pred) <- colnames(test_ratings)
+rownames(test_ratings_pred) <- rownames(test_ratings)
+test_ratings_pred <-round(sweep(test_ratings_pred,MARGIN = 2, STATS = movie_bias, FUN = "+")+user_bias_test,1)
+
+#clip [.5, 5]
+test_ratings_pred[which(test_ratings_pred < .5, arr.ind = TRUE)] <- .5
+test_ratings_pred[which(test_ratings_pred > 5, arr.ind = TRUE)] <- 5
+
+test_ratings_pred %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+
+```
+
+
+### RMSE Calculation for Baseline Predictor
+Calculate the RMSE for both predicted datasets
+```{r}
+
+train_RMSE_baseline <- RMSE_calc(train_ratings, train_ratings_pred)
+test_RMSE_baseline <- RMSE_calc(test_ratings, test_ratings_pred)
+
+train_RMSE_baseline
+test_RMSE_baseline
+```
+
+### Conclusion
+Summarize findings and calculate improvement over RMSE base just on the raw average
+```{r}
+raw_avg <- c(raw_average, raw_average)
+RMSE <- c(train_RMSE, test_RMSE)
+RMSE_b <- c(train_RMSE_baseline, test_RMSE_baseline)
+imp <- percent(round(1-(RMSE_b/RMSE),5))
+
+sum_df <- data.frame(raw_avg, RMSE, RMSE_b, imp)
+colnames(sum_df) <- c("Raw Average", "RMSE", "RMSE Baseline", "Improvement")
+rownames(sum_df) <- c("Train Ratings", "Test Ratings")
+
+sum_df %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+
+```
+
