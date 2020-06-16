@@ -1,30 +1,221 @@
 ---
-title: "Project 2"
+title: "Project 2 - Content-Based and Collaborative Filtering"
 author: "Dhairav Chhatbar"
 date: "6/11/2020"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+```{r, message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(kableExtra)
+library(scales)
+library(recommenderlab)
+library(ggplot2)
 ```
 
-## R Markdown
+The goal of this assignment is for you to try out different ways of implementing and configuring a 
+recommender, and to evaluate your different approaches. Implement at least two of these recommendation algorithms:  
+  
+* Content-Based Filtering 
+* User-User Collaborative Filtering 
+* Item-Item Collaborative Filtering
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+### Load Data
+Load the the rating and movie title datasets and select a data set with the most relevant data, users that have rated atleaset 60 movies and movies that have been rated at least  150 times
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+```{r}
+data("MovieLense")
+movie_ratings <- MovieLense[rowCounts(MovieLense) > 60,  colCounts(MovieLense) > 150] 
+movie_ratings
 
-```{r cars}
-summary(cars)
+
+```
+### Exploratory 
+
+```{r}
+all_ratings <- as.data.frame(as.vector(movie_ratings@data))
+colnames(all_ratings) <- c("Rating")
 ```
 
-## Including Plots
+The distribution of ratings show that most movies have not been rated and the matrix is sparse
+```{r}
+ggplot(all_ratings, aes(Rating)) + geom_bar(color = "red", fill = "light pink")
+```
+When filtering out the 0 ratings, we see that most of the ratings are either 4 or 5 ratings, which indicates a level of bias. Normalization of the ratings will be needed. When looking at the average the distribution is not centered furthering the need for normalization
 
-You can also embed plots, for example:
+```{r, message=FALSE, warning=FALSE}
+ggplot(all_ratings %>% filter(Rating != 0), aes(Rating))+ geom_bar(color = "red", fill = "light pink")
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+avg_user_rating <- as.data.frame(rowMeans(movie_ratings))
+ggplot(avg_user_rating, aes(x=avg_user_rating$`rowMeans(movie_ratings)`))+geom_histogram(fill="light pink", col="grey") + xlab("Rating") + labs(y="Count", title = "Average Rating")
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+List of 10 most rated movies by users and the least 10 rated movies. Notice that the top 10 rated movies are well known as "good" and popular movies
+```{r}
+all_movies <- as.data.frame(colCounts(movie_ratings))
+colnames(all_movies) <- c("RatedCount")
+head(all_movies %>% arrange(desc(RatedCount)), 10) %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+head(all_movies %>% arrange(RatedCount), 10) %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+```
+Looking at a heatmap of all the movies and ratings in scope we can see the sparsity in a row and column pattern where some users have rated more movies than others, and some movies are rated more than other movies
+
+```{r, warning=FALSE, fig.width=35, fig.height=40}
+movie_ratings_df <- getData.frame(movie_ratings) 
+
+ggplot(movie_ratings_df, aes(x=movie_ratings_df$item, y=movie_ratings_df$user, fill=movie_ratings_df$rating)) + geom_tile() + 
+  theme(axis.text.x = element_text(angle=90,hjust=0.95,vjust=0.2))
+
+```
+
+
+
+
+### Split Datasets
+Split the data set into a training and test sets for both IBCF and UBCF sets with a 80% and 20% split respectively
+```{r}
+
+which_train <- sample(x = c(TRUE, FALSE), size = nrow(movie_ratings), replace = TRUE, prob = c(0.8, 0.2))
+head(which_train)
+
+train_ratings <- movie_ratings[which_train, ]
+test_ratings <- movie_ratings[!which_train, ]
+
+train_ratings_IBCF <- train_ratings
+test_ratings_IBCF <- test_ratings
+
+train_ratings_UBCF <- train_ratings
+test_ratings_UBCF <- test_ratings
+
+#Dimension of original data set
+dim(movie_ratings)
+
+#Dimension of training data set
+dim(train_ratings)
+
+#Dimension of test data set
+dim(test_ratings)
+
+```
+
+
+### Item Based Content Filtering
+Given a user, the consider the user's purchases and recommends similar items. Create a recommendation model on item similarity between users using a pearson difference method to find the 30 similar items for each user
+```{r, fig.width=15, fig.height=20, warning=FALSE}
+model_IBCF <- Recommender(data = train_ratings_IBCF, method = "IBCF", parameter = list(k = 30, method = "pearson"))
+IBCF <- getModel(model_IBCF)
+image(IBCF$sim)
+
+```
+Most movie similarity were found to be amongst 10-20 users. Few common movies were found a small(<10) amount users or large(>20) around of users
+
+```{r, warning=FALSE, message=FALSE}
+t <- as.data.frame(colSums(IBCF$sim))
+colnames(t) <- "Sim_Rated"
+
+ggplot(t, aes(x=t$Sim_Rated))+geom_histogram(fill="black", col="grey")+xlab("Similar Items Rated")+ylab("Count")
+```
+After building the model and predicting movie recommendations (6 per user) for the test data set we see the movies recommended the most and the histogram shows a single movie was recommended to mostly 1-2 user, but very few movies were recommended across a large set of users
+```{r}
+to_recc <- 6
+IBCF_pred <- predict(model_IBCF, test_ratings_IBCF, n=to_recc)
+IBCF_pred
+
+recommended_IBCF <- sapply(IBCF_pred@items, function(x){colnames(movie_ratings)[x]})
+
+recc_movie_sum_IBCF <- as.data.frame(table(as.factor(recommended_IBCF)))
+colnames(recc_movie_sum_IBCF) <- c("Movie", "Frequency")
+
+head(recc_movie_sum_IBCF %>% arrange(desc(Frequency)),10)
+ggplot(recc_movie_sum_IBCF, aes(x=Frequency)) + geom_bar() + scale_x_continuous("Movie Recommendation Frequency", labels = recc_movie_sum_IBCF$Frequency, breaks = recc_movie_sum_IBCF$Frequency) + ylab("Count")
+
+```
+We calculate the Root Square Mean Error for our predictions across various parameter changes:  
+  
+* k: Number of similar items to find ranging from 1-200  
+* Similarity function: both Cosine and Pearson 
+  
+Notice that using the pearson similarity function results in a smaller RMSE over the cosine similarity function
+```{r}
+
+
+eval <- evaluationScheme(movie_ratings, method = "cross-validation", k=3, goodRating=4, given=9)
+
+
+calcPredictionAccuracy(predict(model_IBCF, getData(eval, "known"), type="ratings"), getData(eval, "unknown"))[1]
+
+k_val <- 1:ncol(movie_ratings)
+RMSE_Pearson <- rep(0, ncol(movie_ratings))
+RMSE_Cosine <- rep(0, ncol(movie_ratings))
+algo_eval <- data.frame(k_val, RMSE_Pearson, RMSE_Cosine)
+
+for(i in 1:ncol(movie_ratings))
+{
+  model_IBCF <- Recommender(data = train_ratings_IBCF, method = "IBCF", parameter = list(k = i, method = "pearson"))
+  algo_eval$RMSE_Pearson[i] <- calcPredictionAccuracy(predict(model_IBCF, getData(eval, "known"), type="ratings"), getData(eval, "unknown"))[1]
+  model_IBCF <- Recommender(data = train_ratings_IBCF, method = "IBCF", parameter = list(k = i, method = "cosine"))
+   algo_eval$RMSE_Cosine[i] <- calcPredictionAccuracy(predict(model_IBCF, getData(eval, "known"), type="ratings"), getData(eval, "unknown"))[1]
+}
+
+algo_eval %>% gather(Comparison_Method,value, RMSE_Pearson, RMSE_Cosine) %>% ggplot(aes(x=`k_val`, y=value, colour=Comparison_Method)) + geom_line(size=1) + labs(x="k",y="RMSE")
+  
+```
+
+
+### User Based Content Filtering
+Another approach of recommendation is to take a given user and find similar users then, recommend the top-rated items purchased by 
+similar users using the pearson similarity function
+```{r, fig.width=20, fig.height=25}
+model_UBCF <- Recommender(data = train_ratings_UBCF, method = "UBCF", parameter = list(method = "pearson"))
+UBCF <- getModel(model_UBCF)
+image(UBCF$data)
+
+
+```
+Using the UBCF recommendation model predict recommendations (6 per user) on the test data set. The most recommended movies are displayed as well as a histogram showing the distribution of movie recommendations. Note that as compared to IBCF, UBCF has movies that were recommended across a larger user base. 
+
+```{r}
+to_recc <- 6
+UBCF_pred <- predict(model_UBCF, test_ratings_UBCF, n=to_recc)
+UBCF_pred
+
+recommended_UBCF <- sapply(UBCF_pred@items, function(x){colnames(movie_ratings)[x]})
+
+recc_movie_sum_UBCF <- as.data.frame(table(as.factor(recommended_UBCF)))
+colnames(recc_movie_sum_UBCF) <- c("Movie", "Frequency")
+
+head(recc_movie_sum_UBCF %>% arrange(desc(Frequency)),10)
+ggplot(recc_movie_sum_UBCF, aes(x=Frequency)) + geom_bar() + scale_x_continuous("Movie Recommendation Frequency", labels = recc_movie_sum_UBCF$Frequency, breaks = recc_movie_sum_UBCF$Frequency) + ylab("Count")
+```
+
+We calculate the Root Square Mean Error for our predictions across various parameter changes:  
+  
+* nn: the number of similar users ranging from 5-200  
+* Similarity function: both Cosine and Pearson 
+  
+Notice that using the pearson similarity function results in a smaller RMSE over the cosine similarity function
+
+```{r}
+
+eval2 <- evaluationScheme(movie_ratings, method = "split", train=.8, goodRating=4, given=9)
+
+k_val <- 1:ncol(movie_ratings)
+RMSE_Pearson <- rep(0, ncol(movie_ratings))
+RMSE_Cosine <- rep(0, ncol(movie_ratings))
+algo_eval2 <- data.frame(k_val, RMSE_Pearson, RMSE_Cosine)
+
+for(i in 5:ncol(movie_ratings))
+{
+  model_UBCF <- Recommender(data = train_ratings_UBCF, method = "UBCF", parameter = list(nn=i, method = "pearson"))
+  algo_eval2$RMSE_Pearson[i] <- calcPredictionAccuracy(predict(model_UBCF, getData(eval2, "known"), type="ratings"), getData(eval2, "unknown"))[1]
+  model_UBCF <- Recommender(data = train_ratings_UBCF, method = "UBCF", parameter = list(nn=i, method = "cosine"))
+   algo_eval2$RMSE_Cosine[i] <- calcPredictionAccuracy(predict(model_UBCF, getData(eval, "known"), type="ratings"), getData(eval, "unknown"))[1]
+}
+
+algo_eval2[5:nrow(algo_eval2),] %>% gather(Comparison_Method,value, RMSE_Pearson, RMSE_Cosine) %>% ggplot(aes(x=`k_val`, y=value, colour=Comparison_Method)) + geom_line(size=1) + labs(x="nn",y="RMSE")
+
+```
+
+### Summary
+When recommending items to users using both an item based and user based content filtering approach we see that the UBCF with the pearson similarity function approach generates more recommendations at a lower RMSE
