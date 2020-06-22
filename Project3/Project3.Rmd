@@ -1,0 +1,200 @@
+---
+title: "Project 3 - Matrix Factorization Methods"
+author: "Dhairav Chhatbar"
+date: "6/19/2020"
+output: html_document
+---
+
+
+The goal of this assignment is give you practice working with Matrix Factorization techniques. 
+  
+ Your task is implement a matrix factorization method—such as singular value decomposition (SVD) or 
+Alternating Least Squares (ALS)—in the context of a recommender system. 
+  
+You may approach this assignment in a number of ways.  You are welcome to start with an existing 
+recommender system written by yourself or someone else.  Remember as always to cite your sources, 
+so that you can be graded on what you added, not what you found. 
+  
+SVD can be thought of as a pre-processing step for feature engineering.  You might easily start with 
+thousands or millions of items, and use SVD to create a much smaller set of “k” items (e.g. 20 or 70). 
+
+```{r, message=FALSE, warning=FALSE}
+library(recommenderlab)
+library(dplyr)
+library(tidyr)
+library(kableExtra)
+library(data.table)
+data("MovieLense")
+
+```
+
+### Create Data Subset for SVD Decomposition
+In this example to see how SVD decomposition recommender systems work, we will take a small subset of popular movies; Toy Story, Aladdin, Lion King, The Rock, Twister (1996), The Abyss, Alien, Psycho, and The Shining.  
+
+Note that these 9 movies are in a specific genre, respectively Animation, Action, and Horror.  
+
+To highlight some of the features of SVD decomposition, the users have been selected to have a preference for one of the 3 genres:  
+  
+* Animation preference: 18, 664, 771, 821
+* Action preference: 430, 453
+* Horror preference 270, 372, 617, 833
+
+
+```{r}
+
+# Get subset of movie Lense dataset of most rated movies and most actively rating users
+movie_ratings <- getData.frame(MovieLense[rowCounts(MovieLense) > 60,  colCounts(MovieLense) > 150])
+
+# Determine 3 movies for each genre of Animation, Action, and Horror
+animation <- MovieLenseMeta %>% filter(Animation == 1 & `Children's`== 1 & title %in% movie_ratings$item) 
+action <- MovieLenseMeta %>% filter(Thriller == 1 & Adventure == 1 & Musical == 0 & title %in% movie_ratings$item)
+horror <- MovieLenseMeta %>% filter(Horror == 1 & title %in% movie_ratings$item)
+
+
+# Create dataframe of the selected 9 movies 
+df2 <- spread(movie_ratings %>% filter(item %in% animation$title[1:3] | item %in% action$title[1:3] | item %in% horror$title[1:3]), key = item, value = rating)
+col.order <- c("user","Toy Story (1995)","Aladdin (1992)", "Lion King, The (1994)", "Rock, The (1996)", "Twister (1996)", "Abyss, The (1989)", "Alien (1979)", "Psycho (1960)", "Shining, The (1980)")
+df2 <- df2[,col.order]
+df3 <- df2[2:length(df2)]
+row.names(df3) <- as.character(df2$user)
+df3[is.na(df3)] <- 0
+
+
+# Determine users that have a visible preference of a specific genre based on ratings
+animation_fans <- df3 %>% filter(`Toy Story (1995)` > 3  & `Lion King, The (1994)` > 3 & `Aladdin (1992)` > 3 &
+                                 `Rock, The (1996)` <= 3 & `Twister (1996)`  <= 3  &  `Abyss, The (1989)` <= 3 &
+                                 `Alien (1979)` <= 3 & `Psycho (1960)` <= 3 & `Shining, The (1980)` <= 3)
+
+action_fans <- df3 %>% filter(`Toy Story (1995)` <= 3  & `Lion King, The (1994)` <= 2 & `Aladdin (1992)` <= 2 &
+                                 `Rock, The (1996)` >= 3 & `Twister (1996)`  >= 0  &  `Abyss, The (1989)` >= 3 &
+                                 `Alien (1979)` <= 3 & `Psycho (1960)` <= 3 & `Shining, The (1980)` <= 3)
+  
+
+horror_fans <- df3 %>% filter(`Toy Story (1995)` %in% c(0)  & `Lion King, The (1994)` < 3 & `Aladdin (1992)` < 3 &
+                              `Rock, The (1996)` <= 3 & `Twister (1996)`  <= 3  &  `Abyss, The (1989)` != 0 &
+                              `Alien (1979)` >= 3 & `Psycho (1960)` >= 3 & `Shining, The (1980)` >= 3)
+
+
+# Combine users of specific genre preference 
+m2 <- rbind(animation_fans, action_fans)
+m2 <- rbind(m2, horror_fans)
+m <- as.matrix(m2)
+
+m %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)  %>% add_header_above(c(" ", "Animation" = 3, "Action" = 3, "Horror" = 3))%>% pack_rows("Animation Fans", 1, 4) %>% pack_rows("Action Fans", 5, 6) %>% pack_rows("Horror Fans", 7, 10)
+```
+
+### Singular Value Decomposition
+we will decompose out matrix M into 3 matrices where $M=U\sum V^T$ such that:
+  
+* $U$ and $V$ are column orthonormal
+* $V^T$ has orthonormal rows
+* $\sum$ is a diagonal matrix with singular values
+
+```{r}
+
+#Determine rank of current matrix
+rankMatrix(m)[1]
+
+
+
+svd_m<-svd(m)
+
+#U
+#round(s$u, 2) %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+svd_m$u
+
+#S
+#round(s$d, 2) %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+svd_m$d
+
+#V*
+#t(round(s$v, 2))%>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+t(svd_m$v)
+```
+
+### Latent Factors
+The SUV decomposition helps us see some patterns in the underlying data or latent factors.
+
+The $U$ matrix maps users to genres and can be interpreted as a user to latent factor similarity matrix
+
+
+The $V^T$ matrix maps movies to latent factors per user.  
+
+The $\sum$ matrix measure the strength of each of these latent factors within our dataset where the larger the numeber on the diagonal, the stronger the factor. Factors which are very low can be considered noise within the data
+
+```{r}
+
+#U
+u <- round(svd_m$u, 2)  
+colnames(u) <- c("Animation Latent Factor", "Horror Latent Factor", "Action Latent Factor", " ", " ", " ", " ", " ", " ")
+rownames(u) <- rownames(m)
+u %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F) 
+
+#S
+s <- diag(round(svd_m$d, 2), length(round(svd_m$d, 2)))
+colnames(s) <- c("Animation Latent Factor Strength", "Horror Latent Factor Strength", "Action Latent Factor Strength", " ", " ", " ", " ", " ", " ")
+s %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+
+
+#V*
+v <- t(round(svd_m$v, 2))
+v  %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+
+
+### Dimensionality Reduction
+Since we know in our dataset we have 3 genres, thus we anticipate 3 latent factors, the other factors can be thought of as noise. We can determine which level of noise to remove and reduce the dimensionality of our dataset. 
+
+We start by looking at the $\sum$ matrix and computing the sum of the squares along the diagonal, the total energy. We can drop 10% of the energy as a general rule of thumb. All 3 matrices can be reduced by the same factor, thus reducing the rank of our utility matrix
+
+```{r}
+sum(svd_m$d^2)
+
+
+energy_pct <- round(((svd_m$d^2)/sum(svd_m$d^2))*100,2)
+reduce_by <- 0
+for(i in length(energy_pct):1)
+{
+  if(sum(energy_pct[i:length(energy_pct)]) < 10)
+    reduce_by = i
+}
+
+
+#U
+u_reduced <- round(svd_m$u[,1:1:reduce_by-1],2)
+u_reduced %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+
+#S
+s_reduced <- round(diag(c(svd_m$d[1:reduce_by-1]), length(svd_m$d[1:reduce_by-1])),4) 
+s_reduced %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+
+#V*
+v_reduced <- round(t(svd_m$v)[1:reduce_by-1,],2) 
+v_reduced %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+
+
+
+```
+### Applying Recommendations
+The most simple recommendation that can be made is to use the dot product of the SVD matrices to reconstruct as close as possible the original matrix while reducing the Root Mean Squared Error 
+```{r}
+r <- u_reduced %*% s_reduced %*% v_reduced
+
+r[r < 0] <- 0
+r[r > 5] <- 5
+r <- round(r)
+
+# Original matrix
+m %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+
+# Reconstructed matrix
+r %>% kable() %>% kable_styling(bootstrap_options = "striped", full_width = F)
+
+
+#RMSE
+RMSE(m,r)
+```
+### Conclusion
+While SVD factorization methods alleviate issues with content based filtering algorithms and help see some underlying patterns within the dataset. However, interpreting latent factors can be difficult. 
+
