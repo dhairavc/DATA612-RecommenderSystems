@@ -1,0 +1,143 @@
+---
+title: "Project 4 - Accuracy and Beyond"
+author: "Dhairav Chhatbar"
+date: "6/27/2020"
+output: html_document
+---
+The goal of this assignment is give you practice working with accuracy and other recommender system 
+metrics
+  
+* As in your previous assignments, compare the accuracy of at least two recommender system 
+algorithms against your offline data
+
+* Implement support for at least one business or user experience goal such as increased 
+serendipity, novelty, or diversity
+
+* Compare and report on any change in accuracy before and after you’ve made the change in #2
+
+* As part of your textual conclusion, discuss one or more additional experiments that could be 
+performed and/or metrics that could be evaluated only if online evaluation was possible.  Also, 
+briefly propose how you would design a reasonable online evaluation environment
+
+### Load Data & Goals
+In this assignment we will attempt the best recommender model on the Jester dataset which is a a rating of a set of jokes
+```{r, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(recommenderlab)
+library(dplyr)
+library(kableExtra)
+data("Jester5k")
+```
+
+### Explore Data
+Exploratory visuals show that this dataset has:
+  
+* 5000 users and 100 jokes
+* Ratings are between -10 and +10, with a rating distribution leaning towards positive ratings
+* The ratings are not normally distributed, therefore normalization of the ratings will be beneficial
+* Most users have rated all 100 jokes making this dataset fairly dense with about 72% of the jokes rated across all 5000 users
+
+
+```{r}
+dim(Jester5k)
+
+# Ratings
+all_ratings <- getRatings(Jester5k)
+ggplot() + geom_histogram(aes(all_ratings), binwidth = 1, col="white") + labs(title = "User Ratings", x="Ratings", y="Count") 
+
+all_ratings_norm <- getRatings(normalize(Jester5k, "Center"))
+ggplot() + geom_histogram(aes(all_ratings_norm), binwidth = 1, col="white") + labs(title = "User Ratings Normalized (Center)", x="Ratings", y="Count") 
+
+summary(all_ratings_norm)
+
+#Users
+users <- rowCounts(Jester5k)
+ggplot() + geom_histogram(aes(users), binwidth = 5, col="white") + labs(title = "Jokes Rated by Users", x="Jokes Rated", y="Number of Users")
+
+
+#Density 
+sum(users)/(dim(Jester5k)[1]*dim(Jester5k)[2])
+
+```
+
+#### Need to Remove
+```{r}
+Jester_Norm <-normalize(Jester5k, "Center")
+
+
+eval_jokes <- evaluationScheme(data=Jester_Norm, method="split", train=.80, 
+                               given=min(rowCounts(Jester_Norm))-3, goodRating = 5)
+Jokes_rec_IBCF <- Recommender(data = getData(eval_jokes, "train"), method = "IBCF")
+Jokes_pred_IBCF <- predict(Jokes_rec_IBCF, newdata = getData(eval_jokes, "known"), type="ratings", n=5)
+
+calcPredictionAccuracy(Jokes_pred_IBCF, data = getData(eval_jokes, "unknown"))
+
+
+head(getConfusionMatrix(evaluate(eval_jokes, method = "IBCF", n = seq(10, 100, 10))))
+```
+
+#### Build Models
+We will simulate recommendations on 6 models all Center normalized:
+  
+* Item Based Content Filtering, w\ Cosine difference
+* Item Based Content Filtering, w\ Pearson difference
+* User Based Content Filtering, w\ Cosine difference
+* User Based Content Filtering, w\ Pearson difference
+* Singular Value Decomposition, k = 5
+* Random recommendations to simulate baseline 
+
+```{r, warning=FALSE}
+
+eval_jokes <- evaluationScheme(data=Jester5k, method="split", train=.80, 
+                               given=min(rowCounts(Jester_Norm))-3, goodRating = 5)
+num_jokes_to_recommend <- 100
+
+recc_algos <- list(
+  IBCF_C = list(name = "IBCF", param = list(method = "Cosine", normalize = "Center")),
+  IBCF_P = list(name = "IBCF", param = list(method = "Pearson", normalize = "Center")),
+  UBCF_C = list(name = "UBCF", param = list(method = "Cosine", normalize = "Center")),
+  UBCF_P = list(name = "UBCF", param = list(method = "Pearson", normalize = "Center")),
+  m_SVD = list(name = "SVD", param = list( k=5, normalize = "Center")),
+  random = list(name = "RANDOM", param=NULL)
+)
+
+recommendation_results <- evaluate(eval_jokes, method = recc_algos, n = c(1,5, seq(10, num_jokes_to_recommend, 10)))
+
+
+```
+
+
+#### Acucracy and ROC
+
+
+```{r}
+
+plot(recommendation_results, annotate = TRUE, legend = "topleft") 
+title("ROC curve")
+
+
+plot(recommendation_results, "prec/rec", annotate = TRUE, legend = "bottomright") 
+title("Precision-recall")
+
+
+```
+### Parameter Optimization
+
+```{r}
+vector_k <- c(5, 10, 20, 30, 40)
+models_to_evaluate <- lapply(vector_k, function(k){
+  list(name = "SVD", param = list(normalize = "Center", k = k)) 
+}) 
+names(models_to_evaluate) <- paste0("IBCF_k_", vector_k)
+
+n_recommendations <- c(1, 5, seq(10, 100, 10))
+list_results <- evaluate(x = eval_jokes, method = models_to_evaluate, n = n_recommendations)
+
+
+plot(list_results, annotate = 1, legend = "topleft") 
+title("ROC curve")
+plot(list_results, "prec/rec", annotate = 1, legend = "bottomright")
+title("Precision-recall")
+
+```
+
