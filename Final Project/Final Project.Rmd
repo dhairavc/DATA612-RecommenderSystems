@@ -1,0 +1,23 @@
+---
+title: "Final Project"
+author: "Dhairav Chhatbar"
+date: "6/24/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(data.table)
+```
+
+http://www2.informatik.uni-freiburg.de/~cziegler/BX/
+
+
+```{r}
+temp <- tempfile()
+download.file(url, temp)
+ratings <- fread(unzip(temp, files = "BX-Book-Ratings.csv"))
+books <- fread(unzip(temp, files = "BX-Books.csv"))
+unlink(temp)
+
+```
+
