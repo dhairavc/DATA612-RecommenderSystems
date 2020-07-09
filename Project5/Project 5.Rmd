@@ -1,0 +1,98 @@
+---
+title: "Project 5 - Implementing a Recommender System on Spark"
+author: "Dhairav Chhatbar"
+date: "7/4/2020"
+output: html_document
+---
+
+The goal of this project is give you practice beginning to work with a distributed recommender system. It is sufficient for this assignment to build out your application on a single node.  
+  
+
+Adapt one of your recommendation systems to work with Apache Spark and compare the performance with your previous iteration. Consider the efficiency of the system and the added complexity of using Spark. You may complete the assignment using PySpark (Python), SparkR (R), 
+sparklyr (R), or Scala. 
+  
+Please include in your conclusion:  For your given recommender system’s data, algorithm(s), and (envisioned) implementation, at what point would you see moving to a distributed platform such as Spark becoming necessary?  
+  
+```{r, message=FALSE, warning=FALSE}
+library(recommenderlab)
+library(sparklyr)
+library(dplyr)
+library(tidyr)
+library(kableExtra)
+library(data.table)
+library(ggplot2)
+data("MovieLense")
+```
+
+
+```{r, fig.show="hold", out.width="50%"}
+# dim(MovieLense)
+# 
+# # Ratings
+# all_ratings <- getRatings(MovieLense)
+# ggplot() + geom_histogram(aes(all_ratings), binwidth = 1, col="white") + labs(title = "User Ratings", x="Ratings", y="Count")
+# 
+# all_ratings_norm <- getRatings(normalize(MovieLense, "Center"))
+# ggplot() + geom_histogram(aes(all_ratings_norm), binwidth = 1, col="white") + labs(title = "User Ratings Normalized (Center)", x="Ratings", y="Count")
+# 
+# summary(all_ratings_norm)
+# 
+# #Users
+# users <- rowCounts(MovieLense)
+# ggplot() + geom_histogram(aes(users), binwidth = 5, col="white") + labs(title = "Movies Rated by Users", x="Movies Rated", y="Number of Users")
+# 
+# #Density
+# sum(users)/(dim(MovieLense)[1]*dim(MovieLense)[2])
+```
+
+### Datasetup
+```{r}
+eval_movies <- evaluationScheme(data=MovieLense, method="split", train=.80, 
+                               given=min(rowCounts(MovieLense))-3, goodRating = 3)
+```
+
+
+### RecommenderLab Model
+```{r}
+m1_s <- Sys.time()
+rlab_m <- Recommender(getData(eval_movies, "train"), method = "ALS", param = list(normalize = "Center", n_factors=10))
+rlab_pred <- predict(rlab_m, getData(eval_movies, "known"), type = "ratings")
+m1_f <- Sys.time()
+
+m1_RMSE <- calcPredictionAccuracy(rlab_pred, getData(eval_movies, "unknown"))
+```
+
+
+### Spark Model
+```{r}
+spark_c <- spark_connect(master = "local")
+
+movie_id <- data.frame(item = MovieLenseMeta$title, title_ID = as.numeric(row.names(MovieLenseMeta)))
+
+s_train <- getData.frame(getData(eval_movies, "train"))
+s_train$user <- as.numeric(s_train$user)
+s_train <- left_join(s_train, movie_id, by ="item")
+spark_train <- copy_to(spark_c, s_train, overwrite = TRUE)
+
+s_test <- getData.frame(getData(eval_movies, "known"))
+s_test$user <- as.numeric(s_test$user)
+s_test <- left_join(s_test, movie_id, by ="item")
+spark_test <- copy_to(spark_c, s_test, overwrite = TRUE)
+
+glimpse(spark_train)
+
+m2_s <- Sys.time()
+spark_m <- ml_als(spark_train, rating_col = "rating", user_col = "user", item_col = "title_ID", max_iter = 5)
+spark_pred <- ml_transform(spark_m, spark_test) %>% collect()
+m2_f <- Sys.time()
+```
+
+### Comparison
+```{r}
+df <- data.frame(RMSE = c(m1_RMSE[1],RMSE(spark_pred$rating, spark_pred$prediction)), 
+                 Runtime = c(m1_f-m1_s, m2_f-m2_s))
+rownames(df) <- c("Recommender Lab", "Spark")
+df
+spark_disconnect(spark_c)
+```
+
